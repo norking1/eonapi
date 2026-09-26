@@ -244,7 +244,20 @@ async def root():
                 <!-- Custom Graph -->
                 <div v-if="meterData" style="background-color: #FFFFFF; border-radius: 0.5rem; box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1); border: 1px solid #e5e5e5;" class="p-6 mb-8">
                     <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
-                        <h3 class="text-xl font-bold">Custom Energy Graph</h3>
+                        <div class="flex items-center gap-2 relative">
+                            <h3 class="text-xl font-bold">Average Half-hourly Energy Consumption</h3>
+                            <div class="group relative inline-flex">
+                                <span
+                                    class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gray-200 text-xs font-bold text-gray-700 cursor-help"
+                                    aria-label="Methodology for the average half-hourly chart"
+                                >
+                                    ?
+                                </span>
+                                <div class="pointer-events-none absolute left-1/2 top-full z-10 mt-2 w-80 -translate-x-1/2 rounded-lg border border-gray-200 bg-white p-3 text-left text-xs leading-5 text-gray-700 shadow-lg opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
+                                    This chart shows the average consumption for each half-hour slot across the full dataset. For every time such as 00:00 or 07:30, the app groups all matching readings, adds their kWh values together, and divides by the number of readings. This smooths out day-to-day variation so you can see the usual pattern for each time of day. If you pick a specific hour, it instead totals that hour for each day.
+                                </div>
+                            </div>
+                        </div>
                         <div class="flex flex-wrap items-center gap-3">
                             <label class="text-sm font-medium">Graph type</label>
                             <select v-model="customGraphType" class="border border-gray-300 rounded px-3 py-2">
@@ -258,9 +271,6 @@ async def root():
                                 <option v-for="hour in 24" :key="hour" :value="hour - 1">{{ (hour - 1).toString().padStart(2, '0') }}:00</option>
                             </select>
 
-                            <button @click="renderCustomGraph" style="background-color: #1a1a1a; color: #FFFFFF;" class="py-2 px-4 rounded hover:opacity-90 transition duration-200 text-sm">
-                                Generate
-                            </button>
                             <button @click="exportCustomGraph" style="background-color: #737373; color: #FFFFFF;" class="py-2 px-4 rounded hover:opacity-90 transition duration-200 text-sm">
                                 Save PNG
                             </button>
@@ -355,6 +365,16 @@ async def root():
                     }
                 }
             },
+            watch: {
+                customGraphType() {
+                    if (!this.meterData) return;
+                    this.$nextTick(() => this.renderCustomGraph());
+                },
+                customHour() {
+                    if (!this.meterData) return;
+                    this.$nextTick(() => this.renderCustomGraph());
+                }
+            },
             methods: {
                 async handleLogin() {
                     this.loading = true;
@@ -442,6 +462,8 @@ async def root():
                     });
 
                     await this.createDailyChart();
+                    await this.$nextTick();
+                    this.renderCustomGraph();
                 },
 
                 async createDailyChart() {
