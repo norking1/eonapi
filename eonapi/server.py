@@ -241,6 +241,44 @@ async def root():
                     </div>
                 </div>
 
+                <!-- Custom Graph -->
+                <div v-if="meterData" style="background-color: #FFFFFF; border-radius: 0.5rem; box-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.1); border: 1px solid #e5e5e5;" class="p-6 mb-8">
+                    <div class="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 mb-6">
+                        <div class="flex items-center gap-2 relative">
+                            <h3 class="text-xl font-bold">Average Half-hourly Energy Consumption</h3>
+                            <div class="group relative inline-flex">
+                                <span
+                                    class="inline-flex items-center justify-center w-5 h-5 rounded-full bg-gray-200 text-xs font-bold text-gray-700 cursor-help"
+                                    aria-label="Methodology for the average half-hourly chart"
+                                >
+                                    ?
+                                </span>
+                                <div class="pointer-events-none absolute left-1/2 top-full z-10 mt-2 w-80 -translate-x-1/2 rounded-lg border border-gray-200 bg-white p-3 text-left text-xs leading-5 text-gray-700 shadow-lg opacity-0 transition-opacity duration-200 group-hover:opacity-100 group-focus-within:opacity-100">
+                                    This chart shows the average consumption for each half-hour slot across the full dataset. For every time such as 00:00 or 07:30, the app groups all matching readings, adds their kWh values together, and divides by the number of readings. This smooths out day-to-day variation so you can see the usual pattern for each time of day. If you pick a specific hour, it instead totals that hour for each day.
+                                </div>
+                            </div>
+                        </div>
+                        <div class="flex flex-wrap items-center gap-3">
+                            <label class="text-sm font-medium">Graph type</label>
+                            <select v-model="customGraphType" class="border border-gray-300 rounded px-3 py-2">
+                                <option value="line">Line</option>
+                                <option value="histogram">Histogram</option>
+                            </select>
+
+                            <label class="text-sm font-medium">Hour</label>
+                            <select v-model="customHour" class="border border-gray-300 rounded px-3 py-2">
+                                <option value="all">All</option>
+                                <option v-for="hour in 24" :key="hour" :value="hour - 1">{{ (hour - 1).toString().padStart(2, '0') }}:00</option>
+                            </select>
+
+                            <button @click="exportCustomGraph" style="background-color: #737373; color: #FFFFFF;" class="py-2 px-4 rounded hover:opacity-90 transition duration-200 text-sm">
+                                Save PNG
+                            </button>
+                        </div>
+                    </div>
+                    <div id="customChart"></div>
+                </div>
+
                 <!-- Actions -->
                 <div class="text-center space-x-4">
                     <button
@@ -250,7 +288,7 @@ async def root():
                         :disabled="loading"
                     >
                         <span v-if="loading">Refreshing...</span>
-                        <span v-else">Refresh Data</span>
+                        <span v-else>Refresh Data</span>
                     </button>
                     <button
                         @click="logout"
@@ -295,9 +333,12 @@ async def root():
                     error: null,
                     meterData: null,
                     mainChart: null,
+                    customChart: null,
                     selectedDay: null,
                     dailyDataMap: {},
-                    sortedDates: []
+                    sortedDates: [],
+                    customGraphType: 'histogram',
+                    customHour: 'all'
                 };
             },
             async mounted() {
@@ -322,6 +363,16 @@ async def root():
                         localStorage.removeItem('eonapi_meter_data');
                         localStorage.removeItem('eonapi_credentials');
                     }
+                }
+            },
+            watch: {
+                customGraphType() {
+                    if (!this.meterData) return;
+                    this.$nextTick(() => this.renderCustomGraph());
+                },
+                customHour() {
+                    if (!this.meterData) return;
+                    this.$nextTick(() => this.renderCustomGraph());
                 }
             },
             methods: {
@@ -411,6 +462,8 @@ async def root():
                     });
 
                     await this.createDailyChart();
+                    await this.$nextTick();
+                    this.renderCustomGraph();
                 },
 
                 async createDailyChart() {
@@ -611,6 +664,152 @@ async def root():
                     const currentIndex = this.sortedDates.indexOf(this.selectedDay);
                     const nextDate = this.sortedDates[currentIndex + 1];
                     await this.showDayDetails(nextDate);
+                },
+
+                buildCustomGraphSeries() {
+                    if (!this.meterData || !this.meterData.consumption_data) {
+                        return { labels: [], values: [], annotations: [] };
+                    }
+
+                    const records = this.meterData.consumption_data.map(item => {
+                        const date = new Date(item.startAt);
+                        return {
+                            startAt: item.startAt,
+                            value: parseFloat(item.value),
+                            timeLabel: date.toLocaleTimeString('en-GB', {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                                hour12: false,
+                                timeZone: 'Europe/London'
+                            })
+                        };
+                    });
+
+                    if (this.customHour === 'all') {
+                        const grouped = {};
+                        records.forEach(record => {
+                            const key = record.timeLabel;
+                            if (!grouped[key]) {
+                                grouped[key] = [];
+                            }
+                            grouped[key].push(record.value);
+                        });
+
+                        const labels = Object.keys(grouped).sort((a, b) => {
+                            const toMinutes = (label) => {
+                                const [hours, minutes] = label.split(':').map(Number);
+                                return (hours * 60) + minutes;
+                            };
+                            return toMinutes(a) - toMinutes(b);
+                        });
+
+                        const values = labels.map(label => {
+                            const bucket = grouped[label];
+                            const total = bucket.reduce((sum, val) => sum + val, 0);
+                            return Number((total / bucket.length).toFixed(3));
+                        });
+
+                        const annotations = [
+                            { x: '02:00', x2: '05:00', fillColor: '#7ccf8a', opacity: 0.18, label: { text: 'Super Off-Peak' } },
+                            { x: '16:00', x2: '19:00', fillColor: '#e88d8d', opacity: 0.18, label: { text: 'Peak' } },
+                            { x: '00:00', x2: '02:00', fillColor: '#d8d8d8', opacity: 0.12 },
+                            { x: '05:00', x2: '16:00', fillColor: '#d8d8d8', opacity: 0.12 },
+                            { x: '19:00', x2: '23:59', fillColor: '#d8d8d8', opacity: 0.12 }
+                        ];
+
+                        return { labels, values, annotations };
+                    }
+
+                    const selectedHour = Number(this.customHour);
+                    const groupedByDate = {};
+                    records.forEach(record => {
+                        const date = new Date(record.startAt);
+                        const localHour = Number(date.toLocaleTimeString('en-GB', {
+                            hour: '2-digit',
+                            hour12: false,
+                            timeZone: 'Europe/London'
+                        }));
+
+                        if (localHour !== selectedHour) return;
+
+                        const dateKey = date.toISOString().slice(0, 10);
+                        if (!groupedByDate[dateKey]) {
+                            groupedByDate[dateKey] = 0;
+                        }
+                        groupedByDate[dateKey] += record.value;
+                    });
+
+                    const labels = Object.keys(groupedByDate).sort();
+                    const values = labels.map(date => Number(groupedByDate[date].toFixed(3)));
+
+                    return { labels, values, annotations: [] };
+                },
+
+                renderCustomGraph() {
+                    if (!this.meterData || !this.meterData.consumption_data) return;
+
+                    const { labels, values, annotations } = this.buildCustomGraphSeries();
+                    if (!labels.length) return;
+
+                    if (this.customChart) {
+                        this.customChart.destroy();
+                    }
+
+                    const chartType = this.customGraphType === 'line' ? 'line' : 'bar';
+                    const seriesName = this.customHour === 'all' ? 'Average Consumption' : 'Total Consumption';
+
+                    const options = {
+                        series: [{
+                            name: seriesName,
+                            data: values
+                        }],
+                        chart: {
+                            type: chartType,
+                            height: 400,
+                            toolbar: { show: false },
+                            animations: { enabled: true, speed: 200 }
+                        },
+                        plotOptions: {
+                            bar: {
+                                borderRadius: 4,
+                                dataLabels: { position: 'top' }
+                            }
+                        },
+                        xaxis: {
+                            categories: labels,
+                            labels: {
+                                rotate: this.customHour === 'all' ? -45 : 0,
+                                rotateAlways: this.customHour === 'all'
+                            }
+                        },
+                        yaxis: {
+                            title: { text: 'Consumption (kWh)' },
+                            labels: { formatter: (val) => parseFloat(val).toFixed(3) }
+                        },
+                        tooltip: {
+                            y: { formatter: (val) => `${parseFloat(val).toFixed(3)} kWh` }
+                        },
+                        colors: ['#3b82f6'],
+                        stroke: chartType === 'line' ? { width: 2.5, curve: 'smooth' } : { width: 0 },
+                        fill: { opacity: chartType === 'line' ? 0.2 : 0.8 },
+                        annotations: { xaxis: annotations }
+                    };
+
+                    this.customChart = new ApexCharts(document.querySelector('#customChart'), options);
+                    this.customChart.render();
+                },
+
+                exportCustomGraph() {
+                    if (!this.customChart) {
+                        return;
+                    }
+
+                    this.customChart.dataURI().then(({ imgURI }) => {
+                        const link = document.createElement('a');
+                        link.href = imgURI;
+                        link.download = `eon-custom-graph-${this.customHour === 'all' ? 'all-hours' : `hour-${this.customHour}`}.png`;
+                        link.click();
+                    });
                 }
             }
         }).mount('#app');
